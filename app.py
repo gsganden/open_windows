@@ -9,13 +9,10 @@ import json # Import json for embedding data in JS
 import asyncio
 
 # --- Configuration ---
-# *** UPDATED: Use NYC coordinates by default ***
 DEFAULT_LAT = 40.7128
 DEFAULT_LON = -74.0060
 WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
-# *** ADDED AQI API URL ***
 AQI_API_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
-# INDOOR_REF_TEMP_F = 69 # No longer a constant
 
 # --- Data Classes ---
 @dataclass
@@ -201,11 +198,20 @@ def find_optimal_periods(weather_data: dict, aqi_data: dict | None, inputs: Weat
     else:
         print("Warning: AQI data not available or invalid.")
 
-    try: tz = pytz.timezone(weather_data.get('timezone', 'UTC'))
-    except pytz.UnknownTimeZoneError: tz = pytz.utc
+    try:
+        api_timezone_str = weather_data.get('timezone', 'UTC') # *** ADDED: Get timezone string for logging ***
+        tz = pytz.timezone(api_timezone_str)
+    except pytz.UnknownTimeZoneError:
+        api_timezone_str = 'UTC (Fallback)' # *** ADDED: Update string if fallback used ***
+        tz = pytz.utc
     indoor_ref_temp_c = ftoc(inputs.indoor_ref_temp)
     if indoor_ref_temp_c is None:
         return ForecastResult(periods=[], info="Error: Invalid indoor reference temperature.", daily_chart_data={}, daily_good_intervals={}, daily_good_periods_text={})
+
+    # --- REMOVE Log Inputs --- 
+    # print(f"--- Modal Log: find_optimal_periods Inputs ---")
+    # print(f"Modal Log: {inputs}")
+    # --- End Log Inputs ---
 
     overall_good_periods_text = []
     overall_start_time = None
@@ -218,11 +224,13 @@ def find_optimal_periods(weather_data: dict, aqi_data: dict | None, inputs: Weat
         precip_probability = precip_prob[i] if i < len(precip_prob) else 0.0
         aqi = aqi_values_dict.get(time_str)
         dt_utc = datetime.fromisoformat(time_str)
-        dt_local = dt_utc.astimezone(tz)
+        dt_local = tz.localize(dt_utc)    # NEW: Localize the naive time using the API's timezone
+
         predicted_rh_in = None
         is_good = False
-        temp_ok, rh_ok, precip_ok, precip_prob_ok, aqi_ok = False, False, False, False, False
+        temp_ok, rh_ok, precip_ok, precip_prob_ok, aqi_ok = False, False, False, False, False # Initialize checks
         primary_data_ok = (temp_out_f is not None and dew_point_out_f is not None and precip is not None)
+
         if primary_data_ok:
             dew_point_out_c = ftoc(dew_point_out_f)
             predicted_rh_in = calculate_rh(indoor_ref_temp_c, dew_point_out_c)
@@ -231,19 +239,36 @@ def find_optimal_periods(weather_data: dict, aqi_data: dict | None, inputs: Weat
             precip_ok = precip < 0.1
             precip_prob_ok = precip_probability <= inputs.max_precip_prob
             if aq_available: aqi_ok = (aqi is not None and aqi <= inputs.max_aqi)
-            else: aqi_ok = True
+            else: aqi_ok = True # Assume OK if AQI not available
             is_good = temp_ok and rh_ok and precip_ok and precip_prob_ok and aqi_ok
+        
+        # --- REMOVE Log Hourly Checks --- 
+        # if dt_local.hour in [8, 9, 10, 18, 19, 20]:
+        #     rh_str = f"{predicted_rh_in:.1f}" if predicted_rh_in is not None else "N/A"
+        #     print(f"--- Modal Log: Hourly Check {dt_local} ---")
+        #     print(f"  Input Checks: temp={temp_ok}, rh={rh_ok}, precip={precip_ok}, precip_prob={precip_prob_ok}, aqi={aqi_ok}")
+        #     print(f"  Values: temp_out={temp_out_f:.1f}, pred_rh_in={rh_str}, precip={precip:.2f}, precip_prob={precip_probability:.1f}, aqi={aqi}")
+        #     print(f"  Overall is_good: {is_good}")
+        # --- End REMOVE Log Hourly Checks ---
 
         hourly_data_list.append((dt_local, is_good, temp_out_f, predicted_rh_in, precip, aqi, precip_probability))
 
         # Aggregate overall text periods
         if is_good and overall_start_time is None: overall_start_time = dt_local
         elif not is_good and overall_start_time is not None:
-            end_time = dt_local; start_fmt=overall_start_time.strftime('%a %I:%M %p'); end_fmt=end_time.strftime('%a %I:%M %p');
+            end_time = dt_local
+            # --- REMOVE Log times for string formatting ---
+            # print(f"--- Log: Formatting overall period: start={overall_start_time}, end={end_time} ---")
+            # --- End log REMOVAL ---
+            start_fmt=overall_start_time.strftime('%a %I:%M %p'); end_fmt=end_time.strftime('%a %I:%M %p');
             if overall_start_time.date()==end_time.date(): end_fmt=end_time.strftime('%I:%M %p');
             overall_good_periods_text.append((start_fmt,end_fmt)); overall_start_time=None
     if overall_start_time is not None:
-        end_time=(datetime.fromisoformat(times[-1]).astimezone(tz)+timedelta(hours=1)); start_fmt=overall_start_time.strftime('%a %I:%M %p'); end_fmt=end_time.strftime('%a %I:%M %p');
+        end_time=(datetime.fromisoformat(times[-1]).astimezone(tz)+timedelta(hours=1))
+        # --- REMOVE Log times for string formatting (end of forecast) ---
+        # print(f"--- Log: Formatting overall period (end): start={overall_start_time}, end={end_time} ---")
+        # --- End log REMOVAL ---
+        start_fmt=overall_start_time.strftime('%a %I:%M %p'); end_fmt=end_time.strftime('%a %I:%M %p');
         if overall_start_time.date()==end_time.date(): end_fmt=end_time.strftime('%I:%M %p');
         overall_good_periods_text.append((start_fmt,end_fmt))
 
@@ -516,7 +541,30 @@ async def get(inputs: WeatherInputs):
             results_content_list.append(P("No forecast data available to display."))
         else:
             sorted_days = sorted(result.daily_chart_data.keys(), key=lambda d: datetime.strptime(d, '%a %Y-%m-%d'))
+
+            # --- Determine current date in the location's timezone --- 
+            current_local_date = None
+            try:
+                # tz is defined earlier in the 'get' function when processing forecast_data
+                if 'timezone' in forecast_data:
+                     tz_api = pytz.timezone(forecast_data.get('timezone', 'UTC'))
+                     current_local_date = datetime.now(tz_api).date()
+                else: # Fallback if timezone info somehow missing
+                     current_local_date = datetime.now().date()
+            except Exception as e:
+                print(f"Error determining current local date: {e}")
+                current_local_date = datetime.now().date() # Fallback
+            # --- End date determination ---
+            # print(f"Modal Log: Current local date for filtering = {current_local_date}") # REMOVE Log current date
+
             for day_str in sorted_days:
+                # --- Filter out past days --- 
+                day_date = datetime.strptime(day_str, '%a %Y-%m-%d').date()
+                if current_local_date and day_date < current_local_date:
+                    # print(f"Skipping past day: {day_str}") # Optional logging
+                    continue
+                # --- End filtering ---
+
                 day_chart_data = result.daily_chart_data[day_str]
                 day_good_intervals = result.daily_good_intervals.get(day_str, [])
                 day_good_periods_text = result.daily_good_periods_text.get(day_str, [])
