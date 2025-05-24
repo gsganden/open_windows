@@ -855,13 +855,16 @@ async def get(inputs: WeatherInputs):
                 day_label = P(day_str, Cls="day-label")
                 day_content_children = [day_label]
 
-                if day_good_periods_text:
-                    day_content_children.append(
-                        H4("Good times to open windows:", Cls="mt-3 h6")
-                    )
-                    list_items = [Li(period) for period in day_good_periods_text]
-                    text_list_ul = Ul(*list_items, Cls="daily-periods-list")
-                    day_content_children.append(text_list_ul)
+                day_content_children.append(
+                    H4("Good times to open windows:", Cls="mt-3 h6")
+                )
+                list_items = (
+                    [Li(period) for period in day_good_periods_text]
+                    if day_good_periods_text
+                    else [P("None", Cls="mt-3")]
+                )
+                text_list_ul = Ul(*list_items, Cls="daily-periods-list")
+                day_content_children.append(text_list_ul)
 
                 day_content_children.extend(
                     [main_chart_div, main_chart_script, aqi_chart_div, aqi_chart_script]
