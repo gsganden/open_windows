@@ -447,6 +447,8 @@ def create_day_chart_script(
     ],  # Updated tuple
     good_intervals: list[tuple[datetime, datetime]],
     inputs: WeatherInputs,
+    timezone_str: str,
+    is_today: bool = False,
 ) -> Script:
     chart_id = f"chart-div-{day_str.replace(' ', '-').replace('/', '-')}"
     hours = [dt.isoformat() for dt, _, _, _, _, _, _ in hourly_data]
@@ -533,9 +535,40 @@ def create_day_chart_script(
             "line": {"color": "#87ceeb", "width": 1, "dash": "dash"},
         }
     )
+    # Add current time line only for today
+    if is_today:
+        current_time_shape = {
+            "type": "line",
+            "xref": "x",
+            "yref": "paper", 
+            "x0": "CURRENT_TIME_PLACEHOLDER",
+            "y0": 0,
+            "x1": "CURRENT_TIME_PLACEHOLDER", 
+            "y1": 1,
+            "line": {"color": "red", "width": 2, "dash": "dot"}
+        }
+        shapes.append(current_time_shape)
     shapes_json = json.dumps(shapes)
+    
+    current_time_js = ""
+    if is_today:
+        current_time_js = f'''
+        // Get current time in the forecast location's timezone for today only
+        var currentTime = new Date().toLocaleString("sv-SE", {{timeZone: "{timezone_str}"}}).replace(' ', 'T');
+        // Replace placeholder with actual current time
+        shapesData = shapesData.map(shape => {{
+            if (shape.x0 === 'CURRENT_TIME_PLACEHOLDER') {{
+                return {{...shape, x0: currentTime, x1: currentTime}};
+            }}
+            return shape;
+        }});
+        '''
+    
     script_content = f"""
     try {{ 
+        var shapesData = {shapes_json};
+        {current_time_js}
+        
         var trace_temp = {{ x: {hours_json}, y: {temps_json}, name: 'Outdoor Temp (°F)', type: 'scatter', mode: 'lines', yaxis: 'y1', line: {{ color: '#ff7f0e' }} }};
         var trace_rh = {{ x: {hours_json}, y: {rh_in_json}, name: 'Predicted Indoor RH (%)', type: 'scatter', mode: 'lines', yaxis: 'y2', line: {{ color: '#2ca02c' }} }};
         var trace_precip_prob = {{ x: {hours_json}, y: {precip_prob_json}, name: 'Precip Probability (%)', type: 'scatter', mode: 'lines', yaxis: 'y3', line: {{ color: '#87ceeb', width: 2 }} }};
@@ -548,7 +581,7 @@ def create_day_chart_script(
             margin: {{ l: 40, r: 40, t: 20, b: 0 }},
             legend: {{ x: 0.5, y: 1.1, xanchor: 'center', orientation: 'h' }},
             height: 300,
-            shapes: {shapes_json}
+            shapes: shapesData
         }};
         Plotly.newPlot('{chart_id}', [trace_temp, trace_rh, trace_precip_prob], layout, {{responsive: true}});
      }} catch (e) {{ console.error('Plotly error for {chart_id}:', e); var el=document.getElementById('{chart_id}'); if(el) el.innerHTML='Error.'; }}
@@ -845,8 +878,10 @@ async def get(inputs: WeatherInputs):
                 aqi_chart_div = Div(id=aqi_chart_id, Cls="aqi-chart-container")
 
                 # Chart Scripts
+                forecast_timezone = forecast_data.get("timezone", "UTC")
+                is_today = current_local_date and day_date == current_local_date
                 main_chart_script = create_day_chart_script(
-                    day_str, day_chart_data, day_good_intervals, inputs
+                    day_str, day_chart_data, day_good_intervals, inputs, forecast_timezone, is_today
                 )
                 aqi_chart_script = create_aqi_chart_script(
                     day_str, day_chart_data, inputs.max_aqi
